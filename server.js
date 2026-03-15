@@ -458,6 +458,26 @@ app.delete('/api/documents/:id', async (req, res) => {
   }
 });
 
+// Réinitialisation complète de la base de données
+app.delete('/api/reset', async (req, res) => {
+  try {
+    const db = await dbPromise;
+    await db.run('DELETE FROM BuildingInfo');
+    await db.run('DELETE FROM Apartments');
+    await db.run('DELETE FROM Payments');
+    await db.run('DELETE FROM Expenses');
+    await db.run('DELETE FROM Operations');
+    await db.run('DELETE FROM Assets');
+    await db.run('DELETE FROM AssetPayments');
+    await db.run('DELETE FROM ProfileRequests');
+    await db.run('DELETE FROM Reminders');
+    await db.run('DELETE FROM Documents');
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Tous les autres appels (non API) renvoient l'application React
 app.use(express.static(path.join(__dirname, 'dist')));
 app.get('*path', (req, res) => {

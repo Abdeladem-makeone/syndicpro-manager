@@ -236,5 +236,11 @@ export const api = {
   deleteDocument: async (id: string) => {
     const res = await fetch(`${API_URL}/documents/${id}`, { method: 'DELETE' });
     return handleResponse(res);
+  },
+
+  // Réinitialisation complète de la base
+  resetDatabase: async () => {
+    const res = await fetch(`${API_URL}/reset`, { method: 'DELETE' });
+    return handleResponse(res);
   }
 };

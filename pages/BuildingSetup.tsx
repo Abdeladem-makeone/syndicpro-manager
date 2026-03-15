@@ -82,8 +82,18 @@ const BuildingSetup: React.FC<BuildingSetupProps> = ({
       onNotify?.("Importation désactivée. Remplacez le fichier SQLite pour restorer.", "info");
    };
 
-   const handleClearCache = () => {
-      alert("Impossible de vider le cache, les données sont persistées sur le serveur SQL.");
+   const handleClearCache = async () => {
+      const confirmed = window.confirm(
+         "⚠️ Cette action va supprimer toutes les données (appartements, paiements, dépenses, documents...) et réinitialiser la base pour déclarer une nouvelle résidence.\n\nÊtes-vous sûr ?"
+      );
+      if (!confirmed) return;
+      try {
+         await api.resetDatabase();
+         onNotify?.("Base de données réinitialisée. Vous pouvez configurer une nouvelle résidence.", "success");
+         window.location.reload();
+      } catch (err) {
+         onNotify?.("Erreur lors de la réinitialisation.", "error");
+      }
    };
 
    const toggleField = (field: keyof BuildingInfo) => {
@@ -272,7 +282,7 @@ const BuildingSetup: React.FC<BuildingSetupProps> = ({
                         <h3 className="text-[11px] font-black text-slate-800 uppercase tracking-widest">Fichiers Locaux</h3>
                      </div>
                      <button onClick={handleClearCache} className="px-4 py-1.5 bg-rose-50 text-rose-600 rounded-lg text-[9px] font-black uppercase tracking-widest border border-rose-100 hover:bg-rose-100 transition-all">
-                        Vider le cache
+                        Nouvelle résidence
                      </button>
                   </div>
 
