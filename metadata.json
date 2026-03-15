@@ -1,0 +1,7 @@
+{
+  "name": "SyndicPro Manager",
+  "description": "Une application complète de gestion de copropriété (syndic) permettant de gérer les appartements, les cotisations, les dépenses et de générer des bilans financiers intelligents grâce à l'IA.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
