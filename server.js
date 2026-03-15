@@ -4,6 +4,8 @@ import { open } from 'sqlite';
 import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,12 +89,153 @@ async function setupDb() {
       id TEXT PRIMARY KEY,
       data TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS OtpCodes (
+      id TEXT PRIMARY KEY,
+      phone TEXT NOT NULL,
+      code TEXT NOT NULL,
+      expiresAt INTEGER NOT NULL,
+      used INTEGER DEFAULT 0
+    );
   `);
+
+  // Ajouter la colonne password si elle n'existe pas encore
+  try { await db.run('ALTER TABLE Apartments ADD COLUMN password TEXT'); } catch {}
 
   console.log("Base de données SQLite initialisée.");
 }
 
+// --- HELPERS ---
+
+function normalizePhone(phone) {
+  return (phone || '').replace(/\D/g, '');
+}
+
+function formatPhoneForWhatsApp(phone) {
+  const clean = normalizePhone(phone);
+  if (clean.startsWith('0')) return '212' + clean.substring(1);
+  if (!clean.startsWith('212')) return '212' + clean;
+  return clean;
+}
+
+async function findApartmentByPhone(db, phone) {
+  const input = normalizePhone(phone);
+  const apartments = await db.all('SELECT * FROM Apartments');
+  return apartments.find(a => {
+    const aptPhone = normalizePhone(a.phone);
+    return aptPhone && (aptPhone === input || aptPhone.endsWith(input) || input.endsWith(aptPhone));
+  });
+}
+
+async function sendWhatsAppOtp(phone, code, buildingInfo) {
+  const { whatsappApiKey, whatsappSenderNumber, name } = buildingInfo || {};
+  if (!whatsappApiKey || !whatsappSenderNumber) return false;
+  const to = formatPhoneForWhatsApp(phone);
+  const body = `🏢 *${name || 'SyndicPro'}*\n\nVotre code de vérification : *${code}*\n\n⏱ Valide 10 minutes. Ne le partagez pas.`;
+  try {
+    const resp = await fetch(`https://api.ultramsg.com/${whatsappSenderNumber}/messages/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: whatsappApiKey, to, body })
+    });
+    const result = await resp.json();
+    return result.sent === 'true' || result.status === 'success' || !!result.id;
+  } catch (err) {
+    console.error('WhatsApp OTP error:', err.message);
+    return false;
+  }
+}
+
 setupDb().catch(console.error);
+
+// --- AUTH ROUTES ---
+
+// Étape 1 : envoyer OTP WhatsApp
+app.post('/api/auth/send-otp', async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Numéro requis' });
+    const db = await dbPromise;
+    const apt = await findApartmentByPhone(db, phone);
+    if (!apt) return res.status(404).json({ error: 'Numéro non trouvé dans la résidence' });
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const normalized = normalizePhone(phone);
+    await db.run('UPDATE OtpCodes SET used = 1 WHERE phone = ?', normalized);
+    await db.run(
+      'INSERT INTO OtpCodes (id, phone, code, expiresAt, used) VALUES (?, ?, ?, ?, 0)',
+      [crypto.randomUUID(), normalized, code, Date.now() + 10 * 60 * 1000]
+    );
+
+    const buildingRow = await db.get('SELECT data FROM BuildingInfo WHERE id = 1');
+    const buildingInfo = buildingRow ? JSON.parse(buildingRow.data) : {};
+    const sent = await sendWhatsAppOtp(phone, code, buildingInfo);
+
+    if (!sent) {
+      // En dev, retourner le code directement si WhatsApp non configuré
+      if (process.env.NODE_ENV !== 'production') {
+        return res.json({ success: true, hasPassword: !!apt.password, dev_code: code });
+      }
+      return res.status(500).json({ error: 'Échec envoi WhatsApp. Vérifiez la configuration syndic (clé API + numéro expéditeur).' });
+    }
+
+    res.json({ success: true, hasPassword: !!apt.password });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Étape 2 : vérifier OTP
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { phone, code } = req.body;
+    const db = await dbPromise;
+    const normalized = normalizePhone(phone);
+    const otp = await db.get(
+      'SELECT * FROM OtpCodes WHERE phone = ? AND code = ? AND used = 0 ORDER BY expiresAt DESC LIMIT 1',
+      [normalized, code]
+    );
+    if (!otp) return res.status(400).json({ error: 'Code incorrect' });
+    if (Date.now() > otp.expiresAt) return res.status(400).json({ error: 'Code expiré. Demandez un nouveau code.' });
+
+    await db.run('UPDATE OtpCodes SET used = 1 WHERE id = ?', otp.id);
+    const apt = await findApartmentByPhone(db, phone);
+    res.json({ success: true, isFirstLogin: !apt.password, apartmentId: apt.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Étape 3a : créer / réinitialiser mot de passe (après OTP vérifié)
+app.post('/api/auth/set-password', async (req, res) => {
+  try {
+    const { phone, password } = req.body;
+    if (!password || password.length < 6) return res.status(400).json({ error: 'Mot de passe trop court (min 6 caractères)' });
+    const db = await dbPromise;
+    const apt = await findApartmentByPhone(db, phone);
+    if (!apt) return res.status(404).json({ error: 'Appartement non trouvé' });
+    const hashed = await bcrypt.hash(password, 10);
+    await db.run('UPDATE Apartments SET password = ? WHERE id = ?', [hashed, apt.id]);
+    res.json({ success: true, user: { id: apt.id, username: apt.owner, role: 'owner', apartmentId: apt.id } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Étape 3b : connexion avec mot de passe (utilisateurs existants)
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { phone, password } = req.body;
+    const db = await dbPromise;
+    const apt = await findApartmentByPhone(db, phone);
+    if (!apt || !apt.password) return res.status(401).json({ error: 'Compte non configuré. Utilisez le code WhatsApp.' });
+    const match = await bcrypt.compare(password, apt.password);
+    if (!match) return res.status(401).json({ error: 'Mot de passe incorrect' });
+    res.json({ success: true, user: { id: apt.id, username: apt.owner, role: 'owner', apartmentId: apt.id } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // --- API ROUTES ---
 

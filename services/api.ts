@@ -242,5 +242,38 @@ export const api = {
   resetDatabase: async () => {
     const res = await fetch(`${API_URL}/reset`, { method: 'DELETE' });
     return handleResponse(res);
+  },
+
+  // Auth propriétaire
+  sendOtp: async (phone: string) => {
+    const res = await fetch(`${API_URL}/auth/send-otp`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone })
+    });
+    return handleResponse(res);
+  },
+
+  verifyOtp: async (phone: string, code: string) => {
+    const res = await fetch(`${API_URL}/auth/verify-otp`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, code })
+    });
+    return handleResponse(res);
+  },
+
+  setPassword: async (phone: string, password: string) => {
+    const res = await fetch(`${API_URL}/auth/set-password`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, password })
+    });
+    return handleResponse(res);
+  },
+
+  loginWithPassword: async (phone: string, password: string) => {
+    const res = await fetch(`${API_URL}/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, password })
+    });
+    return handleResponse(res);
   }
 };
